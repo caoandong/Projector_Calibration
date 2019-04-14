@@ -19,6 +19,47 @@ sy = 1080.0/720
 K_cam_origin = np.array([[639.930358887,0,639.150634766],[0,639.930358887,351.240905762],[0,0,1]])
 K_cam = np.array([[sx*639.930358887,0,sx*639.150634766],[0,sy*639.930358887,sy*351.240905762],[0,0,1]])
 dist_coef = np.array([0.0, 0.0, 0.0, 0.0, 0.0])
+# Text parameters
+font                   = cv2.FONT_HERSHEY_SIMPLEX
+bottomLeftCornerOfText = (10,500)
+fontScale              = 0.5
+fontColor              = (255,0,255)
+lineType               = 2
+
+def plot_charuco(R, tvec, charucoCorners, charucoIds, K=K_cam, dist_coef=dist_coef, ori_idx=0):
+    charucoCorners_normalized = cv2.convertPointsToHomogeneous(cv2.undistortPoints(charucoCorners, K, dist_coef))
+    charucoCorners_normalized = np.squeeze(charucoCorners_normalized)
+    t = np.array(tvec)
+    plane_normal = R[2,:] # last row of plane rotation matrix is normal to plane
+    plane_point = t.reshape(3,)     # t is a point on the plane
+    charucoCorners = []
+    epsilon = 1e-06
+    for p in charucoCorners_normalized:
+        p = p.reshape(3,)
+        ray_direction = p / np.linalg.norm(p)
+        ray_point = p
+
+        ndotu = plane_normal.dot(ray_direction.T)
+
+        if abs(ndotu) < epsilon:
+            print ("no intersection or line is within plane")
+
+        w = ray_point - plane_point
+        si = -plane_normal.dot(w.T) / ndotu
+        v = w + si * ray_direction
+        Psi = w + si * ray_direction + plane_point
+        charucoCorners.append(Psi)
+
+    # dist = np.array([np.linalg.norm(tvec - np.array(pt)) for pt in charucoCorners])
+    ori = charucoCorners[ori_idx]
+    print('Origin id: ', charucoIds[ori_idx], ' origin xyz: ', ori)
+    charuco_plot = []
+    charuco_plot.append(mlab.points3d(ori[0], ori[1], ori[2], scale_factor=0.01, color=(1,0,0)))
+    mlab.text3d(ori[0], ori[1], ori[2], str(charucoIds[ori_idx]), scale=(0.01,0.01,0.01))
+    new_corners = np.delete(charucoCorners, (ori_idx), axis=0)
+    for pt in new_corners:
+        charuco_plot.append(mlab.points3d(pt[0], pt[1], pt[2], scale_factor=0.01, color=(0,0,1)))
+    return charucoCorners, np.array(ori)
 
 def get_charuco(frame, K_cam=K_cam, dist_coef=dist_coef):
     # detect charuco
@@ -29,7 +70,11 @@ def get_charuco(frame, K_cam=K_cam, dist_coef=dist_coef):
     if corners == None or len(corners) == 0:
         return None
     ret, charucoCorners, charucoIds = cv2.aruco.interpolateCornersCharuco(corners, ids, frame, cb)
-    # print("camera calib mat before\n%s"%K)
+    cv2.aruco.drawDetectedCornersCharuco(frame, charucoCorners, charucoIds)
+    # cv2.imshow('charuco',frame)
+    # cv2.waitKey(0)
+    print("charucoCorners")
+    print("camera calib mat before\n%s"%K)
     ret, K, dist_coef, rvecs, tvecs = cv2.aruco.calibrateCameraCharuco([charucoCorners],
                                                                        [charucoIds],
                                                                        cb,
@@ -39,8 +84,9 @@ def get_charuco(frame, K_cam=K_cam, dist_coef=dist_coef):
                                                                        # flags = cv2.CALIB_USE_INTRINSIC_GUESS)
                                                                        flags = cv2.CALIB_ZERO_TANGENT_DIST + cv2.CALIB_USE_INTRINSIC_GUESS  + cv2.CALIB_FIX_FOCAL_LENGTH + cv2.CALIB_FIX_PRINCIPAL_POINT + cv2.CALIB_FIX_K1  + cv2.CALIB_FIX_K2 + cv2.CALIB_FIX_K3 + cv2.CALIB_FIX_K4 + cv2.CALIB_FIX_K5 + cv2.CALIB_FIX_K6)
 
+    # Plot?
     K_cam = K
-    return [charucoCorners, charucoIds, rvecs, tvecs]
+    return [frame, charucoCorners, charucoIds, rvecs, tvecs]
 
 def intersectCirclesRaysToBoard(circles, rvec, t, K, dist_coef):
     circles_normalized = cv2.convertPointsToHomogeneous(cv2.undistortPoints(circles, K, dist_coef)) # z= 1
@@ -49,7 +95,7 @@ def intersectCirclesRaysToBoard(circles, rvec, t, K, dist_coef):
         return None
 
     R, _ = cv2.Rodrigues(rvec)
-
+    
     # https://stackoverflow.com/questions/5666222/3d-line-plane-intersection
     plane_x = R[0,:]
     plane_y = R[1,:]
@@ -80,8 +126,23 @@ def intersectCirclesRaysToBoard(circles, rvec, t, K, dist_coef):
         circles_3d.append(Psi)
     return np.array(circles_2d), np.array(circles_3d)
 
-def get_circle(frame, ret_charuco, K_cam=K_cam, dist_coeff=dist_coef):
-    charucoCorners, charucoIds, rvec, tvec = ret_charuco
+def sort_circles(circles, ori):
+    # Find the closest circle to the origin of the board
+
+    print('circles: ', circles, ' ori: ', ori)
+    min_dist = 10e10
+    min_idx = None
+    for i in range(len(circles)):
+        circ = circles[i]
+        dist = np.sqrt((circ[0] - ori[0])**2 - (circ[1] - ori[1])**2)
+        if min_dist > dist:
+            min_dist = dist
+            min_idx = i
+    print('min dist: ', min_dist, ' circle idx: ', min_idx, ' circle coord: ', circles[min_idx])
+
+def get_circle(frame, ret_charuco, ori_idx, charucoCorners, projCirclePoints=None, K_cam=K_cam, dist_coeff=dist_coef):
+    frame_charuco, charucoCorners, charucoIds, rvec, tvec = ret_charuco
+    # origin = np.squeeze(charucoCorners[ori_idx])
     rvec = np.array(rvec)
     tvec = np.array(tvec)
     K = K_cam.copy()
@@ -90,8 +151,18 @@ def get_circle(frame, ret_charuco, K_cam=K_cam, dist_coeff=dist_coef):
     img = frame.copy()
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     ret, circles = cv2.findCirclesGrid(gray, circles_grid_size, flags=cv2.CALIB_CB_ASYMMETRIC_GRID + cv2.CALIB_CB_CLUSTERING)
+    # Plot
+    cv2.drawChessboardCorners(frame_charuco, circles_grid_size, circles, ret)
+    circles_tmp = np.squeeze(circles)
+    # sort_circles(circles_tmp, origin)
     # ray-plane intersection: circle-center to chessboard-plane
     circles2D, circles3D = intersectCirclesRaysToBoard(circles, rvec, tvec, K, dist)
+    if projCirclePoints is not None:
+        for i in range(len(circles_tmp)):
+            circ = circles_tmp[i]
+            cv2.putText(frame_charuco, str(projCirclePoints[i]), (circ[0],circ[1]), font, fontScale, fontColor, lineType)
+        cv2.imshow('circle with charuco', frame_charuco)
+        cv2.waitKey(0)
     return circles, circles2D, circles3D
 
 def get_circle_coord(num_sets=1, top_left = [1151, 202], h_sep = 142, v_sep = 71, l_sep = 71):
@@ -170,8 +241,8 @@ def plot_epipolar(tvec, R=None, color=(1,0,0)):
     pts = [pt1, pt2, pt3]
     pts_rot = [np.matmul(R, p - np.array(tvec)) for p in pts]
     ori = np.matmul(R, - np.array(tvec))
-    print('pts_rot: \n', pts_rot)
-    print('ori: \n', ori)
+    # print('pts_rot: \n', pts_rot)
+    # print('ori: \n', ori)
     pts = np.array(pts_rot)
     for i in range(3):
         mlab.text3d(ori[0]+pts_rot[i][0]*0.1, ori[1]+pts_rot[i][1]*0.1, ori[2]+pts_rot[i][2]*0.1, str(i), scale=(0.01,0.01,0.01))
@@ -190,21 +261,22 @@ circleCam = []
 projCirclePointsAccum = []
 figure = mlab.figure('visualize')
 for fname in files:
-    # if count >= 1:
-    #     break
+    if count >= 1:
+        break
     if fname.endswith('.png'):
         frame = cv2.imread(img_path+fname)
         print(fname)
-        ret_charuco = get_charuco(frame)
+        ret_charuco = get_charuco(frame.copy())
 
         if ret_charuco is not None:
-            charucoCorners, charucoIds, rvecs, tvecs = ret_charuco
+            frame_charuco, charucoCorners, charucoIds, rvecs, tvecs = ret_charuco
             R, _ = cv2.Rodrigues(rvecs[0])
-            boad_vecs,board = plot_plane(tvecs[0], R, color=(1,0,0))
+            charucoCorners_world, origin = plot_charuco(R, tvecs[0], charucoCorners, charucoIds)
+            boad_vecs,board = plot_plane(origin, R, color=(1,0,0))
             cam_vec,cam_plane = plot_plane([0,0,0], color=(0,1,0))
             # Find circle
-            circle_cam, ret_circle, ret_circle3d = get_circle(frame, ret_charuco)
             projCirclePoints = get_circle_coord()
+            circle_cam, ret_circle, ret_circle3d = get_circle(frame, [frame_charuco, charucoCorners, charucoIds, rvecs, origin], 0, charucoCorners, projCirclePoints=np.squeeze(projCirclePoints))
             circleCam.append(circle_cam)
             circleBoard.append(ret_circle)
             circleWorld.append(ret_circle3d)
@@ -212,15 +284,15 @@ for fname in files:
             # Visualize circle
             circle_plot = [mlab.points3d(circle[0], circle[1], circle[2], scale_factor=0.01) for circle in ret_circle3d]
             # circle_board_plot = [mlab.points3d(circle[0], circle[1], circle[2], scale_factor=0.01) for circle in ret_circle]
-            # figure.scene.disable_render = True # Super duper trick
-            # circle_text = [mlab.text3d(ret_circle3d[i,0], ret_circle3d[i,1], ret_circle3d[i,2], str(i), scale=(0.01,0.01,0.01)) for i in range(ret_circle3d.shape[0])]
+            figure.scene.disable_render = True # Super duper trick
+            circle_text = [mlab.text3d(ret_circle3d[i,0], ret_circle3d[i,1], ret_circle3d[i,2], str(i), scale=(0.01,0.01,0.01)) for i in range(ret_circle3d.shape[0])]
             # circle_text = []
-            # for i in range(ret_circle3d.shape[0]):
-            #     idx = mlab.text3d(ret_circle3d[i,0], ret_circle3d[i,1], ret_circle3d[i,2], str(i), scale=(0.01,0.01,0.01))
-            #     coord = mlab.text3d(ret_circle3d[i,0], ret_circle3d[i,1], ret_circle3d[i,2]-0.01, "("+str(projCirclePoints[0][i][0])+","+str(projCirclePoints[0][i][1])+")", scale=(0.005,0.005,0.005))
-            #     circle_text.append([idx, coord])
-            #
-            # figure.scene.disable_render = False
+            for i in range(ret_circle3d.shape[0]):
+                idx = mlab.text3d(ret_circle3d[i,0], ret_circle3d[i,1], ret_circle3d[i,2], str(i), scale=(0.01,0.01,0.01))
+                # coord = mlab.text3d(ret_circle3d[i,0], ret_circle3d[i,1], ret_circle3d[i,2]-0.02, "("+str(projCirclePoints[0][i][0])+","+str(projCirclePoints[0][i][1])+")", scale=(0.005,0.005,0.005))
+                # circle_text.append([idx, coord])
+            # print('projCirclePoints: \n',projCirclePoints)
+            figure.scene.disable_render = False
             count += 1
 
 circleBoard = np.array(circleBoard).astype('float32')
