@@ -9,6 +9,8 @@ import signal
 # Projector parameters
 w_proj = 1920
 h_proj = 1080
+w_cam = 1270
+h_cam = 720
 R_proj = np.array([[-0.99076131, -0.00491919, -0.13552799],
                      [ 0.02515179, -0.98866989, -0.14798394],
                      [-0.13326448, -0.15002553,  0.97965959]])
@@ -17,7 +19,8 @@ T_proj = np.array([ 0.09225259, -0.25273821,  1.1683442 ])
 sx = 1920.0/1270
 sy = 1080.0/720
 K_cam_origin = np.array([[639.930358887,0,639.150634766],[0,639.930358887,351.240905762],[0,0,1]])
-K_cam = np.array([[sx*639.930358887,0,sx*639.150634766],[0,sy*639.930358887,sy*351.240905762],[0,0,1]])
+# K_cam = np.array([[sx*639.930358887,0,sx*639.150634766],[0,sy*639.930358887,sy*351.240905762],[0,0,1]])
+K_cam = K_cam_origin
 dist_coef = np.array([0.0, 0.0, 0.0, 0.0, 0.0])
 # Text parameters
 font                   = cv2.FONT_HERSHEY_SIMPLEX
@@ -64,7 +67,7 @@ def plot_charuco(R, tvec, charucoCorners, charucoIds, K=K_cam, dist_coef=dist_co
 def get_charuco(frame, K_cam=K_cam, dist_coef=dist_coef):
     # detect charuco
     # K = K_cam.copy()
-    K = K_cam_origin.copy()
+    K = K_cam.copy()
     corners, ids, rejected = aruco.detectMarkers(frame, aruco_dict, parameters=parameters)
     corners, ids, rejected, recovered = cv2.aruco.refineDetectedMarkers(frame, cb, corners, ids, rejected, cameraMatrix=K, distCoeffs=dist_coef)
     if corners == None or len(corners) == 0:
@@ -73,8 +76,6 @@ def get_charuco(frame, K_cam=K_cam, dist_coef=dist_coef):
     cv2.aruco.drawDetectedCornersCharuco(frame, charucoCorners, charucoIds)
     # cv2.imshow('charuco',frame)
     # cv2.waitKey(0)
-    print("charucoCorners")
-    print("camera calib mat before\n%s"%K)
     ret, K, dist_coef, rvecs, tvecs = cv2.aruco.calibrateCameraCharuco([charucoCorners],
                                                                        [charucoIds],
                                                                        cb,
@@ -85,6 +86,7 @@ def get_charuco(frame, K_cam=K_cam, dist_coef=dist_coef):
                                                                        flags = cv2.CALIB_ZERO_TANGENT_DIST + cv2.CALIB_USE_INTRINSIC_GUESS  + cv2.CALIB_FIX_FOCAL_LENGTH + cv2.CALIB_FIX_PRINCIPAL_POINT + cv2.CALIB_FIX_K1  + cv2.CALIB_FIX_K2 + cv2.CALIB_FIX_K3 + cv2.CALIB_FIX_K4 + cv2.CALIB_FIX_K5 + cv2.CALIB_FIX_K6)
 
     # Plot?
+    print("camera calib mat after\n%s"%K)
     K_cam = K
     return [frame, charucoCorners, charucoIds, rvecs, tvecs]
 
@@ -95,12 +97,13 @@ def intersectCirclesRaysToBoard(circles, rvec, t, K, dist_coef):
         return None
 
     R, _ = cv2.Rodrigues(rvec)
-    
+
     # https://stackoverflow.com/questions/5666222/3d-line-plane-intersection
     plane_x = R[0,:]
     plane_y = R[1,:]
     plane_normal = R[2,:] # last row of plane rotation matrix is normal to plane
     plane_point = t.reshape(3,)     # t is a point on the plane
+    print("Distance to the board: ", np.linalg.norm(plane_point))
 
     epsilon = 1e-06
 
@@ -161,8 +164,8 @@ def get_circle(frame, ret_charuco, ori_idx, charucoCorners, projCirclePoints=Non
         for i in range(len(circles_tmp)):
             circ = circles_tmp[i]
             cv2.putText(frame_charuco, str(projCirclePoints[i]), (circ[0],circ[1]), font, fontScale, fontColor, lineType)
-        cv2.imshow('circle with charuco', frame_charuco)
-        cv2.waitKey(0)
+        # cv2.imshow('circle with charuco', frame_charuco)
+        # cv2.waitKey(0)
     return circles, circles2D, circles3D
 
 def get_circle_coord(num_sets=1, top_left = [1151, 202], h_sep = 142, v_sep = 71, l_sep = 71):
@@ -249,31 +252,50 @@ def plot_epipolar(tvec, R=None, color=(1,0,0)):
         vec = mlab.quiver3d(ori[0],ori[1],ori[2],pts_rot[i][0], pts_rot[i][1], pts_rot[i][2], line_width=3, scale_factor=.1, color=color)
         vecs.append(vec)
 
+def visual_reprojection(img, pts3D, K, R, T):
+    img = img_dots.copy()
+    for p in pts3D:
+        p = np.expand_dims(np.array(p), -1)
+        p = np.matmul(K, np.matmul(R, p + T))
+        p = (int(p[1,0]/p[2,0]), int(p[0,0]/p[2,0]))
+        print('Plot point: ', p)
+        cv2.circle(img, p, radius=10, thickness=-1, color=(200,0,0))
+    return img
+
 # frame = cv2.imread("img_calib/img_32.png")
 # ret_charuco = get_charuco(frame)
 
 img_path = 'img_calib/'
+img_dots = cv2.imread("img_calib/calibration/dots.png")
 files = next(os.walk(img_path))[2]
 count = 0
 circleBoard = []
 circleWorld = []
 circleCam = []
 projCirclePointsAccum = []
+img_list = []
+R_cam = 0
+T_cam = 0
 figure = mlab.figure('visualize')
+cam_vec,cam_plane = plot_plane([0,0,0], color=(0,1,0))
 for fname in files:
-    if count >= 1:
+    if count >= 3:
         break
     if fname.endswith('.png'):
         frame = cv2.imread(img_path+fname)
+        frame = cv2.resize(frame,(int(w_cam),int(h_cam)))
+        img_list.append(frame.copy())
         print(fname)
         ret_charuco = get_charuco(frame.copy())
 
         if ret_charuco is not None:
             frame_charuco, charucoCorners, charucoIds, rvecs, tvecs = ret_charuco
             R, _ = cv2.Rodrigues(rvecs[0])
+            R_cam = np.array(R)
+            T_cam = np.array(tvecs[0])
             charucoCorners_world, origin = plot_charuco(R, tvecs[0], charucoCorners, charucoIds)
             boad_vecs,board = plot_plane(origin, R, color=(1,0,0))
-            cam_vec,cam_plane = plot_plane([0,0,0], color=(0,1,0))
+
             # Find circle
             projCirclePoints = get_circle_coord()
             circle_cam, ret_circle, ret_circle3d = get_circle(frame, [frame_charuco, charucoCorners, charucoIds, rvecs, origin], 0, charucoCorners, projCirclePoints=np.squeeze(projCirclePoints))
@@ -309,13 +331,24 @@ ret, K_proj, dist_coef_proj, rvecs, tvecs = cv2.calibrateCamera(circleBoard,
                                                                 dist_coef_proj,
                                                                 # flags = cv2.CALIB_USE_INTRINSIC_GUESS)
                                                                 flags = cv2.CALIB_USE_INTRINSIC_GUESS + cv2.CALIB_ZERO_TANGENT_DIST + cv2.CALIB_FIX_K1  + cv2.CALIB_FIX_K2 + cv2.CALIB_FIX_K3 + cv2.CALIB_FIX_K4 + cv2.CALIB_FIX_K5 + cv2.CALIB_FIX_K6)
-# proj_R, _ = cv2.Rodrigues(rvecs[0])
-# proj_vecs, proj = plot_plane(tvecs[0], proj_R, color=(0,0,1))
-print("proj calib mat after\n%s"%K_proj)
+
+# R_proj, _ = cv2.Rodrigues(rvecs[0])
+# for circ3D in circleBoard:
+#     img_pts,_ = cv2.projectPoints(circ3D, rvecs[0], tvecs[0], K_proj, dist_coef)
+#     img = img_dots.copy()
+#     for p in img_pts:
+#         cv2.circle(img, tuple(p[0,:]), radius=10, thickness=-1, color=(200,0,0))
+#     cv2.imshow('img', img)
+#     cv2.waitKey(0)
+
+# R_cam_proj, _ = cv2.Rodrigues(rvecs[0])
+# proj_vecs, proj = plot_plane(tvecs[0], R_cam_proj, color=(0,0,1))
+
+print("proj calib mat after\n%s"%K_proj.tolist())
 print("proj dist_coef %s"%dist_coef_proj.T)
 print("calibration reproj err %s"%ret)
 print("stereo calibration")
-ret, K, dist_coef, K_proj, dist_coef_proj, proj_R, proj_T, _, _ = cv2.stereoCalibrate(
+ret, K, dist_coef, K_proj, dist_coef_proj, R_cam_proj, T_cam_proj, _, _ = cv2.stereoCalibrate(
         circleWorld,
         circleCam,
         projCirclePointsAccum,
@@ -327,6 +360,27 @@ ret, K, dist_coef, K_proj, dist_coef_proj, proj_R, proj_T, _, _ = cv2.stereoCali
         flags = cv2.CALIB_FIX_INTRINSIC
         )
 
-print("projector displacement from camera: \n",proj_T)
-proj_vecs, proj = plot_plane(proj_T, proj_R, color=(0,0,1))
+T_cam_proj = np.array(T_cam_proj)
+R_cam_proj = np.array(R_cam_proj)
+print("projector displacement from camera: \n",T_cam_proj.tolist())
+print('Projector rotation: \n')
+print(R_cam_proj.tolist())
+proj_vecs, proj = plot_plane(T_cam_proj, R_cam_proj, color=(0,0,1))
 mayavi.mlab.show()
+
+R_proj = np.matmul(R_cam_proj, R_cam)
+# rvec_proj,_ = cv2.Rodrigues(R_proj)
+rvec_proj,_ = cv2.Rodrigues(R_cam_proj)
+T_proj = np.matmul(R_cam_proj, T_cam) + T_cam_proj
+print("Projector Rotation: \n", R_proj)
+print("Projector Translation: \n", T_proj)
+
+for circ3D in circleWorld:
+    # img = visual_reprojection(img_dots, circ3D, K_proj, R_proj, T_proj)
+    # img_pts,_ = cv2.projectPoints(circ3D, rvec_proj, T_proj, K_proj, dist_coef)
+    img_pts,_ = cv2.projectPoints(circ3D, rvec_proj, T_cam_proj, K_proj, dist_coef)
+    img = img_dots.copy()
+    for p in img_pts:
+        cv2.circle(img, tuple(p[0,:]), radius=10, thickness=-1, color=(200,0,0))
+    cv2.imshow('img', img)
+    cv2.waitKey(0)
