@@ -331,7 +331,9 @@ def get_RT(R, T):
 
 img_path = 'img_calib/3/'
 img_dots = cv2.imread("img_calib/calibration/dots.png")
+find_unity_params = False
 files = next(os.walk(img_path))[2]
+
 count = 0
 circleBoard = []
 circleWorld = []
@@ -480,7 +482,7 @@ def find_unity_transformations(pts3D, proj_to_board, cam_to_board, proj_to_cam, 
     print("Set projector y-axis:\n", proj_param[1])
     print("Set projector z-axis:\n", proj_param[2])
     print("Set projector translation:\n", proj_param[0])
-    
+
     if visualize:
         figure = mlab.figure('visualize')
         circle_plot = [mlab.points3d(circle[0,0], circle[1,0], circle[2,0], scale_factor=0.01) for circle in ptsPlane_corrected]
@@ -501,4 +503,5 @@ def find_unity_transformations(pts3D, proj_to_board, cam_to_board, proj_to_cam, 
         cv2.waitKey(0)
     return cam_param, proj_param
 
-find_unity_transformations(np.squeeze(circleWorld).tolist(), proj_to_board, cam_to_board, proj_to_cam, board_to_world, img_dots, K_proj=K_proj, visualize=True, reproject=True)
+if find_unity_params:
+    find_unity_transformations(np.squeeze(circleWorld).tolist(), proj_to_board, cam_to_board, proj_to_cam, board_to_world, img_dots, K_proj=K_proj, visualize=True, reproject=True)
