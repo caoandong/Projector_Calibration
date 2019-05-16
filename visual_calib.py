@@ -19,9 +19,6 @@ R_proj = np.array([[-0.99076131, -0.00491919, -0.13552799],
 T_proj = np.array([ 0.09225259, -0.25273821,  1.1683442 ])
 # Camera parameters
 K_cam_origin = np.array([[639.930358887,0,639.150634766],[0,639.930358887,351.240905762],[0,0,1]])
-# sx = 1920.0/1270
-# sy = 1080.0/720
-# K_cam = np.array([[sx*639.930358887,0,sx*639.150634766],[0,sy*639.930358887,sy*351.240905762],[0,0,1]])
 K_cam = K_cam_origin
 dist_coef = np.array([0.0, 0.0, 0.0, 0.0, 0.0])
 # Text parameters
@@ -30,6 +27,8 @@ bottomLeftCornerOfText = (10,500)
 fontScale              = 0.5
 fontColor              = (255,0,255)
 lineType               = 2
+# Geometric parameters (manually measured)
+board_to_world = np.array([0., 0., 0.2591491014277822])
 
 def plot_charuco(R, tvec, charucoCorners, charucoIds, K=K_cam, dist_coef=dist_coef, ori_idx=0):
     charucoCorners_normalized = cv2.convertPointsToHomogeneous(cv2.undistortPoints(charucoCorners, K, dist_coef))
@@ -87,8 +86,7 @@ def get_charuco(frame, K_cam=K_cam, dist_coef=dist_coef):
                                                                        # flags = cv2.CALIB_USE_INTRINSIC_GUESS)
                                                                        flags = cv2.CALIB_ZERO_TANGENT_DIST + cv2.CALIB_USE_INTRINSIC_GUESS  + cv2.CALIB_FIX_FOCAL_LENGTH + cv2.CALIB_FIX_PRINCIPAL_POINT + cv2.CALIB_FIX_K1  + cv2.CALIB_FIX_K2 + cv2.CALIB_FIX_K3 + cv2.CALIB_FIX_K4 + cv2.CALIB_FIX_K5 + cv2.CALIB_FIX_K6)
 
-    # Plot?
-    print("camera calib mat after\n%s"%K)
+
     K_cam = K
     return [frame, charucoCorners, charucoIds, rvecs, tvecs]
 
@@ -146,14 +144,9 @@ def intersectCirclesRaysToBoard(circles, rvec, t, K, dist_coef, init_param=False
     if init_param:
         # Find the coordinate of the origin
         R_cam = np.linalg.inv(R)
-        print("Rotation from board to cam: ", sp_rot.from_dcm(R).as_quat().tolist())
-        print("Rotation from cam to board: ", sp_rot.from_dcm(R_cam).as_quat().tolist())
-        print("Set cam z to: \n", R_cam[2,:].tolist())
-        print("Set cam y to: \n", R_cam[1,:].tolist())
-        print("Cam Translation: \n", (-1 * t).tolist())
-        origin2D = np.expand_dims(np.expand_dims([452.0, 155.0], 0), 0)
-        # print("circles: \n", circles)
-        # print("origin2D: \n", origin2D)
+        s_w = w_cam/(w_proj*1.0)
+        s_h = h_cam/(h_proj*1.0)
+        origin2D = np.expand_dims(np.expand_dims([s_w * 452.0, s_h * 155.0], 0), 0)
         origin3D = cv2.convertPointsToHomogeneous(cv2.undistortPoints(origin2D, K, dist_coef))
         print("From board center to origin: \n", -1 * distBoardToPoint(np.array(origin3D), plane_point, plane_normal, plane_x, plane_y, epsilon=epsilon))
 
@@ -179,48 +172,6 @@ def intersectCirclesRaysToBoard(circles, rvec, t, K, dist_coef, init_param=False
         circles_3d.append(Psi)
     return np.array(circles_2d), np.array(circles_3d)
 
-'''
-def intersectCirclesRaysToBoard(circles, rvec, t, K, dist_coef):
-    circles_normalized = cv2.convertPointsToHomogeneous(cv2.undistortPoints(circles, K, dist_coef)) # z= 1
-
-    if not rvec.size:
-        return None
-
-    R, _ = cv2.Rodrigues(rvec)
-    R_cam = np.linalg.inv(R)
-    print("Set cam z to: \n", R_cam[2,:].tolist())
-    print("Set cam y to: \n", R_cam[1,:].tolist())
-    print("Cam Translation: \n", (-1 * t).tolist())
-
-    # https://stackoverflow.com/questions/5666222/3d-line-plane-intersection
-    plane_x = R[0,:]
-    plane_y = R[1,:]
-    plane_normal = R[2,:] # last row of plane rotation matrix is normal to plane
-    plane_point = t.reshape(3,)     # t is a point on the plane
-    epsilon = 1e-06
-
-    circles_2d = []
-    circles_3d = []
-    for p in circles_normalized:
-        p = p.reshape(3,)
-        ray_direction = p / np.linalg.norm(p)
-        ray_point = p
-
-        ndotu = plane_normal.dot(ray_direction.T)
-
-        if abs(ndotu) < epsilon:
-            print ("no intersection or line is within plane")
-
-        w = ray_point - plane_point
-        si = -plane_normal.dot(w.T) / ndotu
-        v = w + si * ray_direction
-        Psi = w + si * ray_direction + plane_point
-        vx = v.dot(plane_x)
-        vy = v.dot(plane_y)
-        circles_2d.append(np.array([vx,vy,0.0]))
-        circles_3d.append(Psi)
-    return np.array(circles_2d), np.array(circles_3d)
-'''
 def sort_circles(circles, ori):
     # Find the closest circle to the origin of the board
 
@@ -377,8 +328,6 @@ def get_RT(R, T):
     T_mat = np.concatenate((np.concatenate((np.identity(3), T), axis=1), np.array([0,0,0,1]).reshape(1,4)), axis=0)
     R_mat = np.concatenate((np.concatenate((R, np.zeros((3,1))), axis=1), np.array([0,0,0,1]).reshape(1,4)), axis=0)
     return np.matmul(T_mat, R_mat)
-# frame = cv2.imread("img_calib/img_32.png")
-# ret_charuco = get_charuco(frame)
 
 img_path = 'img_calib/3/'
 img_dots = cv2.imread("img_calib/calibration/dots.png")
@@ -395,8 +344,8 @@ cam_to_board = 0
 figure = mlab.figure('visualize')
 cam_vec,cam_plane = plot_plane([0,0,0], color=(0,1,0))
 for fname in files:
-    # if count >= 1:
-    #     break
+    if count >= 1:
+        break
     if fname.endswith('.png'):
         frame = cv2.imread(img_path+fname)
         frame = cv2.resize(frame,(int(w_cam),int(h_cam)))
@@ -425,22 +374,17 @@ for fname in files:
             # print("circleBoard: \n", ret_circle.tolist())
             # print("circleWorld: \n", ret_circle3d.tolist())
             circle_plot = [mlab.points3d(circle[0], circle[1], circle[2], scale_factor=0.01) for circle in ret_circle3d]
-            # circle_board_plot = [mlab.points3d(circle[0], circle[1], circle[2], scale_factor=0.01) for circle in ret_circle]
             figure.scene.disable_render = True # Super duper trick
             circle_text = [mlab.text3d(ret_circle3d[i,0], ret_circle3d[i,1], ret_circle3d[i,2], str(i), scale=(0.01,0.01,0.01)) for i in range(ret_circle3d.shape[0])]
-            # circle_text = []
             for i in range(ret_circle3d.shape[0]):
                 idx = mlab.text3d(ret_circle3d[i,0], ret_circle3d[i,1], ret_circle3d[i,2], str(i), scale=(0.01,0.01,0.01))
-                # coord = mlab.text3d(ret_circle3d[i,0], ret_circle3d[i,1], ret_circle3d[i,2]-0.02, "("+str(projCirclePoints[0][i][0])+","+str(projCirclePoints[0][i][1])+")", scale=(0.005,0.005,0.005))
-                # circle_text.append([idx, coord])
-            # print('projCirclePoints: \n',projCirclePoints)
             figure.scene.disable_render = False
             count += 1
 
 circleBoard = np.array(circleBoard).astype('float32')
 circleCam = np.array(circleCam).astype('float32')
 circleWorld = np.array(circleWorld).astype('float32')
-print("circleBoard shape: ", circleBoard.shape, " circleCam shape: ", circleCam.shape, " circleWorld shape: ", circleWorld.shape)
+# print("circleBoard shape: ", circleBoard.shape, " circleCam shape: ", circleCam.shape, " circleWorld shape: ", circleWorld.shape)
 projCirclePointsAccum = np.array(projCirclePointsAccum).astype('float32')
 K_proj = np.array([[1500, 0, 1920/2.0],[0,1500,1080/2.0],[0,0,1]],dtype=np.float32)
 dist_coef_proj = np.array([0.0, 0.0, 0.0, 0.0, 0.0],dtype=np.float32)
@@ -451,18 +395,6 @@ ret, K_proj, dist_coef_proj, rvecs, tvecs = cv2.calibrateCamera(circleBoard,
                                                                 dist_coef_proj,
                                                                 # flags = cv2.CALIB_USE_INTRINSIC_GUESS)
                                                                 flags = cv2.CALIB_USE_INTRINSIC_GUESS + cv2.CALIB_ZERO_TANGENT_DIST + cv2.CALIB_FIX_K1  + cv2.CALIB_FIX_K2 + cv2.CALIB_FIX_K3 + cv2.CALIB_FIX_K4 + cv2.CALIB_FIX_K5 + cv2.CALIB_FIX_K6)
-
-# R_proj, _ = cv2.Rodrigues(rvecs[0])
-# for circ3D in circleBoard:
-#     img_pts,_ = cv2.projectPoints(circ3D, rvecs[0], tvecs[0], K_proj, dist_coef)
-#     img = img_dots.copy()
-#     for p in img_pts:
-#         cv2.circle(img, tuple(p[0,:]), radius=10, thickness=-1, color=(200,0,0))
-#     cv2.imshow('img', img)
-#     cv2.waitKey(0)
-
-# R_cam_proj, _ = cv2.Rodrigues(rvecs[0])
-# proj_vecs, proj = plot_plane(tvecs[0], R_cam_proj, color=(0,0,1))
 
 print("proj calib mat after\n%s"%K_proj.tolist())
 print("proj dist_coef %s"%dist_coef_proj.T)
@@ -483,26 +415,90 @@ ret, K, dist_coef, K_proj, dist_coef_proj, R_cam_proj, T_cam_proj, _, _ = cv2.st
 T_cam_proj = np.array(T_cam_proj)
 R_cam_proj = np.array(R_cam_proj)
 print("Translation from projector to camera: \n",(-1 * T_cam_proj).tolist())
-print("Distance: ", np.linalg.norm(T_cam_proj))
+print("Distance from projector to camera: ", np.linalg.norm(T_cam_proj))
 print('Rotation from projector to camera: \n', sp_rot.from_dcm(np.linalg.inv(R_cam_proj)).as_quat().tolist())
 proj_to_cam = np.linalg.inv(get_RT(R_cam_proj, T_cam_proj))
 proj_to_board = np.matmul(cam_to_board, proj_to_cam)
 print("proj_to_cam: \n", proj_to_cam)
 print("cam_to_board: \n", cam_to_board)
 print("proj_to_board: \n", proj_to_board)
-print("Rotation from proj to board: \n", sp_rot.from_dcm(proj_to_board[0:3, 0:3]).as_quat().tolist())
-print("Position from proj to board: \n", np.matmul(proj_to_board, np.array([0,0,0,1]).reshape(4,1)).reshape(4,).tolist())
+# print("Rotation from proj to board: \n", sp_rot.from_dcm(proj_to_board[0:3, 0:3]).as_quat().tolist())
+# print("Position from proj to board: \n", np.matmul(proj_to_board, np.array([0,0,0,1]).reshape(4,1)).reshape(4,).tolist())
 proj_vecs, proj = plot_plane(T_cam_proj, R_cam_proj, color=(0,0,1))
 mayavi.mlab.show()
-
+# Visualize reprojection
 rvec_proj,_ = cv2.Rodrigues(R_cam_proj)
-
 for circ3D in circleWorld:
-    # img = visual_reprojection(img_dots, circ3D, K_proj, R_proj, T_proj)
-    # img_pts,_ = cv2.projectPoints(circ3D, rvec_proj, T_proj, K_proj, dist_coef)
     img_pts,_ = cv2.projectPoints(circ3D, rvec_proj, T_cam_proj, K_proj, dist_coef)
     img = img_dots.copy()
     for p in img_pts:
         cv2.circle(img, tuple(p[0,:]), radius=10, thickness=-1, color=(200,0,0))
     cv2.imshow('img', img)
     cv2.waitKey(0)
+
+
+def from_to_rotation(a,b):
+    v = np.cross(a,b)
+    s = 1.0 * np.linalg.norm(v)
+    c = np.dot(a,b)
+    v_mat = np.array([[0, -1 * v[2], v[1]],[v[2], 0, -1 * v[0]],[-1 * v[1], v[0], 0]], dtype=np.float32)
+    R = np.identity(3) + v_mat + (1-c)/s**2 * np.matmul(v_mat, v_mat)
+    return R
+
+def find_unity_transformations(pts3D, proj_to_board, cam_to_board, proj_to_cam, board_to_world, img_dots, K_proj=[[1049.9283171946713, 0.0, 995.6319450901574], [0.0, 1115.4836215220273, 1302.7626513835548], [0.0, 0.0, 1.0]], last_pt_to_world=[-0.174, 0.154, 0.], visualize=False, reproject=True):
+    board_to_world_mat = np.concatenate((np.concatenate((np.identity(3), board_to_world.reshape(3,1)), axis=1), np.array([0,0,0,1]).reshape(1,4)), axis=0)
+    board_to_world_4D = np.insert(board_to_world, 3, 1).reshape(4,1)
+    # Convert the transformations to the world coordinate
+    proj_to_world = np.matmul(board_to_world_mat, proj_to_board)
+    cam_to_world = np.matmul(board_to_world_mat, cam_to_board)
+    ptsPlane = [np.matmul(cam_to_board, np.insert(np.array(p), 3, 1).reshape(4,1)) + board_to_world_4D for p in pts3D]
+    # Convert the points in board coordinate to the world coordinate
+    R_board_world = from_to_rotation(cam_to_world[0:3,1], np.array([0,1,0])) # Align the camera's y-axis with the world's y-axis
+    ptsPlane_corrected = [np.matmul(R_board_world, np.array([p[0,0], p[1,0], p[2,0]]).reshape(3,1)) for p in ptsPlane]
+    last_pt = ptsPlane_corrected[-1]
+    # Move the origin to the upper left corner of the table (manually measured)
+    last_pt_corrected = np.array(last_pt_to_world).reshape(3,1)
+    z_corrected = last_pt_corrected - last_pt
+    ptsPlane_corrected = [p + z_corrected for p in ptsPlane_corrected]
+    board_to_world_corrected = get_RT(R_board_world, z_corrected)
+    proj_to_world = np.matmul(board_to_world_corrected, proj_to_world)
+    cam_to_world = np.matmul(board_to_world_corrected, cam_to_world)
+    # Convert from Cartesian to Unity
+    T_cam = cam_to_world[0:3, 3].tolist()
+    y_cam = (-1 * cam_to_world[0:3, 1]).tolist()
+    z_cam = cam_to_world[0:3, 2].tolist()
+    cam_param = [[T_cam[0],-1 * T_cam[1],T_cam[2]], [y_cam[0],-1 * y_cam[1],y_cam[2]], [z_cam[0],-1 * z_cam[1],z_cam[2]]]
+    T_proj = proj_to_world[0:3, 3].tolist()
+    y_proj = (-1 * proj_to_world[0:3, 1]).tolist()
+    z_proj = proj_to_world[0:3, 2].tolist()
+    proj_param = [[T_proj[0],-1 * T_proj[1],T_proj[2]], [y_proj[0],-1 * y_proj[1],y_proj[2]], [z_proj[0],-1 * z_proj[1],z_proj[2]]]
+    print()
+    print("Set camera y-axis:\n", cam_param[1])
+    print("Set camera z-axis:\n", cam_param[2])
+    print("Set camera translation:\n", cam_param[0])
+    print()
+    print("Set projector y-axis:\n", proj_param[1])
+    print("Set projector z-axis:\n", proj_param[2])
+    print("Set projector translation:\n", proj_param[0])
+    
+    if visualize:
+        figure = mlab.figure('visualize')
+        circle_plot = [mlab.points3d(circle[0,0], circle[1,0], circle[2,0], scale_factor=0.01) for circle in ptsPlane_corrected]
+        plot_plane(np.array([0,0,0]), np.identity(3), color=(1,0,0))
+        proj_vecs, proj = plot_plane(proj_to_world[0:3,3], proj_to_world[0:3,0:3], color=(0,0,1))
+        cam_vecs, cam = plot_plane(cam_to_world[0:3,3], cam_to_world[0:3,0:3], color=(0,1,0))
+        mayavi.mlab.show()
+    if reproject:
+        world_to_proj = np.linalg.inv(proj_to_world)
+        circ3D = [np.array([circle[0,0], circle[1,0], circle[2,0]], dtype=np.float32).reshape(3,1) for circle in ptsPlane_corrected]
+        K_proj = np.array(K_proj)
+        dist_coef = np.array([0.0, 0.0, 0.0, 0.0, 0.0])
+        img_pts,_ = cv2.projectPoints(np.stack(circ3D), world_to_proj[0:3,0:3], world_to_proj[0:3,3], K_proj, dist_coef)
+        img = img_dots.copy()
+        for p in img_pts:
+            cv2.circle(img, tuple(p[0,:]), radius=10, thickness=-1, color=(200,0,0))
+        cv2.imshow('img', img)
+        cv2.waitKey(0)
+    return cam_param, proj_param
+
+find_unity_transformations(np.squeeze(circleWorld).tolist(), proj_to_board, cam_to_board, proj_to_cam, board_to_world, img_dots, K_proj=K_proj, visualize=True, reproject=True)
